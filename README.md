@@ -43,20 +43,61 @@ let result := [Twin withConnectionTo: ":0" do: [:connection |
 `close` harmless, guard operations after close, and offer scoped
 `withConnection...` / `withWindow...` helpers built on Birnam's `ensure:`.
 
-Window operations are chainable and answer the window on success or an Error:
+Window operations are chainable and answer the window on success or an Error.
+The managed window remembers its last known extent and current colors, so a
+renderer can clear and repaint without carrying parallel native state:
 
 - `write:` and `write:atX:y:`
+- `renderLines:` (clear, repaint rows, synchronize once)
+- `fillCodepoint:fromX:y:width:height:foreground:background:` and `clear`
+- `foreground:background:` with validated `TwinColor` values
 - `title:`
 - `cursorX:y:`
-- `resizeTo:by:`
+- `moveToX:y:`, `resizeTo:by:`, and `scrollByX:y:`
+- `show`, `hide`, `focus`, `raise`, and `lower`
 - `sync`
 - `close`
+
+For windows whose policy differs from the ergonomic default, use
+`newWindow:width:height:cursor:attributes:flags:` or its scoped `withWindow...`
+counterpart. `Twin` names the supported cursor, attribute, and flag constants;
+attribute bits are disjoint and can be combined with `+`.
 
 Connections expose display/server metadata, `flush`, `sync`, `nextEvent`, and
 `waitForEvent`. An event is copied into a `TwinEvent` value and its native
 allocation is freed before it reaches application code. `kind` classifies the
 event as `#key`, `#mouse`, `#change`, `#gadget`, `#menuRow`, `#control`,
-`#display`, or `#unknown`; the raw numeric fields remain available when needed.
+selection/control variants, `#display`, or `#unknown`; the raw numeric fields
+remain available when needed. Predicates cover key, mouse, resize, expose,
+standard close requests, and Shift/Control/Alt modifiers. `observeEvent:` keeps
+a managed window's cached extent current after resize events.
+
+`[connection eventPumpDo: handler]` answers a `TwinEventPump`. Its `poll`,
+`wait`, `drainAtMost:`, and `drain` operations provide one nonblocking step, one
+blocking step, or a bounded drain of queued events (`drain` caps each batch at
+256). The pump deliberately does
+not own the connection and does not install an endless application loop; an IDE
+can multiplex Twin's `fileDescriptor` with evaluator, LSP, subprocess, timer,
+and LLM inputs at the application layer.
+
+## Examples
+
+Each example is a small standalone Birnam project with a local path dependency
+on this checkout:
+
+```sh
+# A scoped hello window; press any key to exit.
+birnam run examples/hello -- :0
+
+# Colors, rectangular cell fill, positioned text.
+birnam run examples/colors -- :0
+
+# Blocking event pump with key, resize, and close handling.
+birnam run examples/events -- :0
+```
+
+Omit the display argument to use `:0`. The event example exits on `q` or the
+window close gadget and prints received event kinds/codes in the terminal.
 
 ## Development
 
@@ -75,9 +116,9 @@ without blocking, and clean up a scoped window:
 birnam run -- :0
 ```
 
-The current slice deliberately stops at the primitives already provided by
-`birnam-alien-twin`: connection metadata, basic windows, UTF-8 output, and
-copied events. An IDE can establish its event loop and ownership model here.
-Menus, gadgets, selections, richer drawing/cell operations, and listener
-integration should be added to the C bridge only when an IDE slice demands
-them, then surfaced here as managed Birnam objects.
+This is the complete custom-drawn application foundation: resource ownership,
+configurable windows, deterministic cell repainting, RGB color, geometry and
+stacking, event classification, and composable event consumption. Twin menus,
+gadgets, inter-client messaging, and selection ownership remain intentionally
+outside this layer until an application chooses to use those server-side
+facilities; they are not required for a text editor that draws its own chrome.

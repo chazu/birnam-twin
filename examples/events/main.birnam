@@ -1,0 +1,34 @@
+let display := [ProjectArgs at: 0 ifAbsent: [| ":0"]];
+
+let result := [Twin withConnectionTo: display do: [:connection |
+  [connection withWindow: "Event pump" width: 62 height: 12 do: [:window |
+    let done := [false asCell];
+    let failure := [nil asCell];
+    let paint := [|
+      [window renderLines: #[
+        "Composable TwinEventPump"
+        ""
+        "Resize this window or type; events print in the terminal."
+        "Press q or the window close gadget to exit."
+      ]]];
+    [paint value];
+    let pump := [connection eventPumpDo: [:event |
+      [window observeEvent: event];
+      [System println: [[[event kind] printString] , [" code=" , [[event code] printString]]]];
+      let repaint := [[event isResize] ifTrue: [| [paint value]] ifFalse: [| event]];
+      [repaint ifNotError: [:ready |
+        [[event isCloseRequest] ifTrue: [| [done set: true]] ifFalse: [| nil]];
+        [[[event isKey] & [[event text] = "q"]]
+          ifTrue: [| [done set: true]]
+          ifFalse: [| nil]];
+        event]]]];
+    [[| [done value]] whileFalse: [|
+      let event := [pump wait];
+      [[event isError]
+        ifTrue: [| [failure set: event]; [done set: true]]
+        ifFalse: [| nil]]]];
+    [[[failure value] isNil]
+      ifTrue: [| window]
+      ifFalse: [| [failure value]]]]]]];
+
+[result ifError: [:error | [System println: [error printString]]]]

@@ -5,7 +5,7 @@ source_roots = ["src"]
 load = ["birnamTwin"]
 
 [dependencies]
-twin = { git = "https://github.com/chazu/birnam-alien-twin.git", rev = "b138078cdf0d9dead185310557a214156502a438" }
+twin = { git = "https://github.com/chazu/birnam-alien-twin.git", rev = "0e93848210bbc6f88c0d72379fc047b39da23d65" }
 
 [test]
 sources = ["test/birnam-twin-test.birnam"]

@@ -1,0 +1,16 @@
+let display := [ProjectArgs at: 0 ifAbsent: [| ":0"]];
+
+let result := [Twin withConnectionTo: display do: [:connection |
+  [connection withWindow: "Twin colors and drawing" width: 54 height: 10 do: [:window |
+    let painted := [window
+      => foreground: [TwinColor brightWhite] background: [TwinColor blueColor]
+      => clear
+      => write: "  A styled, cell-addressed Twin surface  " atX: 5 y: 2
+      => fillCodepoint: 32 fromX: 5 y: 5 width: 42 height: 2
+        foreground: [TwinColor black] background: [TwinColor brightCyan]
+      => foreground: [TwinColor black] background: [TwinColor brightCyan]
+      => write: "Press any key to close" atX: 14 y: 5
+      => sync];
+    [painted ifNotError: [:ready | [connection waitForEvent]]]]]]];
+
+[result ifError: [:error | [System println: [error printString]]]]

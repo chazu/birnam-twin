@@ -7,6 +7,8 @@
 [Globals at: #TwinConnection put: [Object clone]];
 [Globals at: #TwinWindow put: [Object clone]];
 [Globals at: #TwinEvent put: [Object clone]];
+[Globals at: #TwinColor put: [Object clone]];
+[Globals at: #TwinEventPump put: [Object clone]];
 
 [Reflect docModule: #birnamTwin is:
   "Managed Twin connections and windows plus copied event values, built on the alien-twin ABI module."];
@@ -16,6 +18,35 @@
 [Reflect defineMethod: #operationError on: Twin as: [:self |
   [[self lastError] error: #twinOperation]] doc:
   "A Birnam Error carrying alien-twin's latest operation failure."];
+
+// Keep Twin's bit-level constants named at the Birnam boundary. Window
+// attributes are disjoint bits and may be combined with +.
+[Reflect defineMethod: #cursorDefault on: Twin as: [:self | 0]];
+[Reflect defineMethod: #cursorNone on: Twin as: [:self | 1]];
+[Reflect defineMethod: #cursorLine on: Twin as: [:self | 2]];
+[Reflect defineMethod: #cursorSolid on: Twin as: [:self | 8]];
+[Reflect defineMethod: #windowWantMouseMotion on: Twin as: [:self | 1]];
+[Reflect defineMethod: #windowWantKeys on: Twin as: [:self | 2]];
+[Reflect defineMethod: #windowWantMouse on: Twin as: [:self | 4]];
+[Reflect defineMethod: #windowWantChanges on: Twin as: [:self | 8]];
+[Reflect defineMethod: #windowAutoFocus on: Twin as: [:self | 16]];
+[Reflect defineMethod: #windowDraggable on: Twin as: [:self | 256]];
+[Reflect defineMethod: #windowResizable on: Twin as: [:self | 512]];
+[Reflect defineMethod: #windowClosable on: Twin as: [:self | 1024]];
+[Reflect defineMethod: #windowHorizontalBar on: Twin as: [:self | 4096]];
+[Reflect defineMethod: #windowVerticalBar on: Twin as: [:self | 8192]];
+[Reflect defineMethod: #windowAutoKeys on: Twin as: [:self | 16384]];
+[Reflect defineMethod: #windowUsesContents on: Twin as: [:self | 1]];
+[Reflect defineMethod: #windowUsesExpose on: Twin as: [:self | 2]];
+[Reflect defineMethod: #windowUsesFill on: Twin as: [:self | 3]];
+[Reflect defineMethod: #windowCursorOn on: Twin as: [:self | 16]];
+[Reflect defineMethod: #windowBorderless on: Twin as: [:self | 128]];
+[Reflect defineMethod: #windowRowsDefaultColor on: Twin as: [:self | 512]];
+
+[Reflect defineMethod: #defaultWindowAttributes on: Twin as: [:self | 1806] doc:
+  "Keys, mouse, changes, dragging, resizing, and close requests."];
+[Reflect defineMethod: #defaultWindowFlags on: Twin as: [:self | 512] doc:
+  "Twin's default row-backed window with inherited text color."];
 
 [Reflect defineMethod: #connect on: Twin as: [:self |
   let handle := [self open];
@@ -130,14 +161,34 @@
     ifFalse: [|
       [[result = 0]
         ifTrue: [| [Twin operationError]]
-        ifFalse: [| [TwinWindow connection: self id: result]]]]]] doc:
+        ifFalse: [| [TwinWindow connection: self id: result width: width height: height]]]]]] doc:
   "Create and map a managed window, or answer #twinOperation Error."];
+
+[Reflect defineMethod: #newWindow:width:height:cursor:attributes:flags: on: TwinConnection
+  as: [:self :title :width :height :cursor :attributes :flags |
+    let result := [self withHandle: [:handle |
+      [handle twinCreateWindow: title width: width height: height cursor: cursor attributes: attributes flags: flags]]];
+    [[result isError]
+      ifTrue: [| result]
+      ifFalse: [|
+        [[result = 0]
+          ifTrue: [| [Twin operationError]]
+          ifFalse: [| [TwinWindow connection: self id: result width: width height: height]]]]]] doc:
+  "Create a configured managed window. Named constants on Twin describe cursor, attribute, and flag values."];
 
 [Reflect defineMethod: #withWindow:width:height:do: on: TwinConnection as: [:self :title :width :height :body |
   let window := [self newWindow: title width: width height: height];
   [window ifNotError: [:live |
     [[| [body value: live]] ensure: [| [live close]]]]]] doc:
   "Create a window for BODY and delete it afterward; creation errors pass through."];
+
+[Reflect defineMethod: #withWindow:width:height:cursor:attributes:flags:do: on: TwinConnection
+  as: [:self :title :width :height :cursor :attributes :flags :body |
+    let window := [self newWindow: title width: width height: height cursor: cursor
+      attributes: attributes flags: flags];
+    [window ifNotError: [:live |
+      [[| [body value: live]] ensure: [| [live close]]]]]] doc:
+  "Create a configured window for BODY and delete it afterward."];
 
 [Reflect defineMethod: #eventWaiting: on: TwinConnection as: [:self :wait |
   let raw := [self withHandle: [:handle | [handle twinNextEventWait: wait]]];
@@ -161,13 +212,25 @@
   [self eventWaiting: 1]] doc:
   "Block for one event and answer a copied TwinEvent or Error."];
 
+[Reflect defineMethod: #eventPumpDo: on: TwinConnection as: [:self :handler |
+  [TwinEventPump on: self do: handler]] doc:
+  "Answer a composable event pump which dispatches each event to HANDLER."];
+
 // -- managed window -----------------------------------------------------------
 
 [Reflect defineMethod: #connection:id: on: TwinWindow as: [:self :connection :id |
+  [self connection: connection id: id width: 0 height: 0]] doc:
+  "Internal compatibility constructor when the initial extent is unknown."];
+
+[Reflect defineMethod: #connection:id:width:height: on: TwinWindow as: [:self :connection :id :width :height |
   let window := [TwinWindow clone];
   [[db cellFor: window attr: #connection] set: connection];
   [[db cellFor: window attr: #id] set: id];
   [[db cellFor: window attr: #closed] set: false];
+  [[db cellFor: window attr: #width] set: width];
+  [[db cellFor: window attr: #height] set: height];
+  [[db cellFor: window attr: #foreground] set: [TwinColor black]];
+  [[db cellFor: window attr: #background] set: [TwinColor white]];
   window] doc:
   "Internal constructor for a window id owned by CONNECTION."];
 
@@ -182,6 +245,15 @@
 [Reflect defineMethod: #isClosed on: TwinWindow as: [:self |
   [[db cellFor: self attr: #closed] value]] doc:
   "Whether this window has already been deleted."];
+
+[Reflect defineMethod: #width on: TwinWindow as: [:self |
+  [[db cellFor: self attr: #width] value]] doc: "The last known content width in cells."];
+[Reflect defineMethod: #height on: TwinWindow as: [:self |
+  [[db cellFor: self attr: #height] value]] doc: "The last known content height in cells."];
+[Reflect defineMethod: #foreground on: TwinWindow as: [:self |
+  [[db cellFor: self attr: #foreground] value]]];
+[Reflect defineMethod: #background on: TwinWindow as: [:self |
+  [[db cellFor: self attr: #background] value]]];
 
 [Reflect defineMethod: #withWindowHandle: on: TwinWindow as: [:self :body |
   [[self isClosed]
@@ -210,13 +282,80 @@
   "Move the window cursor to X,Y. Answers self or Error."];
 
 [Reflect defineMethod: #resizeTo:by: on: TwinWindow as: [:self :width :height |
-  [self nativeOperation: [:handle :id | [handle twinResize: id width: width height: height]]]] doc:
+  let result := [self nativeOperation: [:handle :id | [handle twinResize: id width: width height: height]]];
+  [result ifNotError: [:window |
+    [[db cellFor: window attr: #width] set: width];
+    [[db cellFor: window attr: #height] set: height];
+    window]]] doc:
   "Resize the window to WIDTH by HEIGHT cells. Answers self or Error."];
+
+[Reflect defineMethod: #moveToX:y: on: TwinWindow as: [:self :x :y |
+  [self nativeOperation: [:handle :id | [handle twinMove: id x: x y: y]]]] doc:
+  "Move the window to display coordinates X,Y."];
+
+[Reflect defineMethod: #scrollByX:y: on: TwinWindow as: [:self :dx :dy |
+  [self nativeOperation: [:handle :id | [handle twinScroll: id dx: dx dy: dy]]]] doc:
+  "Scroll the window contents by DX,DY cells."];
+
+[Reflect defineMethod: #visible: on: TwinWindow as: [:self :visible |
+  [self nativeOperation: [:handle :id | [handle twinSetVisible: id visible: [visible ifTrue: [| 1] ifFalse: [| 0]]]]]] doc:
+  "Set window visibility from a Boolean."];
+[Reflect defineMethod: #show on: TwinWindow as: [:self | [self visible: true]]];
+[Reflect defineMethod: #hide on: TwinWindow as: [:self | [self visible: false]]];
+[Reflect defineMethod: #focus on: TwinWindow as: [:self |
+  [self nativeOperation: [:handle :id | [handle twinFocus: id]]]]];
+[Reflect defineMethod: #raise on: TwinWindow as: [:self |
+  [self nativeOperation: [:handle :id | [handle twinRaise: id]]]]];
+[Reflect defineMethod: #lower on: TwinWindow as: [:self |
+  [self nativeOperation: [:handle :id | [handle twinLower: id]]]]];
+
+[Reflect defineMethod: #foreground:background: on: TwinWindow as: [:self :foreground :background |
+  let result := [self nativeOperation: [:handle :id |
+    [handle twinSetTextColor: id foreground: [foreground rgb24] background: [background rgb24]]]];
+  [result ifNotError: [:window |
+    [[db cellFor: window attr: #foreground] set: foreground];
+    [[db cellFor: window attr: #background] set: background];
+    window]]] doc:
+  "Set the colors used by subsequent UTF-8 writes and remember them for clear/fill."];
+
+[Reflect defineMethod: #fillCodepoint:fromX:y:width:height:foreground:background: on: TwinWindow
+  as: [:self :codepoint :x :y :width :height :foreground :background |
+    [self nativeOperation: [:handle :id |
+      [handle twinFillRect: id x: x y: y width: width height: height codepoint: codepoint
+        foreground: [foreground rgb24] background: [background rgb24]]]]] doc:
+  "Fill a rectangular cell region with one Unicode codepoint and explicit colors."];
+
+[Reflect defineMethod: #clear on: TwinWindow as: [:self |
+  [[[[self width] > 0] & [[self height] > 0]]
+    ifTrue: [| [self fillCodepoint: 32 fromX: 0 y: 0 width: [self width] height: [self height]
+      foreground: [self foreground] background: [self background]]]
+    ifFalse: [| self]]] doc:
+  "Clear the known content extent using the current foreground/background colors."];
 
 [Reflect defineMethod: #write:atX:y: on: TwinWindow as: [:self :text :x :y |
   let moved := [self cursorX: x y: y];
   [moved ifNotError: [:window | [window write: text]]]] doc:
   "Move to X,Y and write TEXT, preserving the first Error."];
+
+[Reflect defineMethod: #renderLines: on: TwinWindow as: [:self :lines |
+  let cleared := [self clear];
+  [cleared ifNotError: [:window |
+    let count := [[[lines size] min: [window height]] max: 0];
+    let drawn := [[count = 0]
+      ifTrue: [| window]
+      ifFalse: [| [[0 to: [count - 1]] inject: window into: [:result :y |
+        [result ifNotError: [:live | [live write: [lines at: y] atX: 0 y: y]]]]]]];
+    [drawn ifNotError: [:live | [live sync]]]]]] doc:
+  "Clear, draw up to HEIGHT strings as rows, and synchronize once."];
+
+[Reflect defineMethod: #observeEvent: on: TwinWindow as: [:self :event |
+  [[[event isFor: self] & [event isResize]]
+    ifTrue: [|
+      [[db cellFor: self attr: #width] set: [event width]];
+      [[db cellFor: self attr: #height] set: [event height]]]
+    ifFalse: [| nil]];
+  self] doc:
+  "Update cached geometry from a resize event and answer the window."];
 
 [Reflect defineMethod: #sync on: TwinWindow as: [:self |
   let result := [[self connection] sync];
@@ -235,6 +374,45 @@
             ifTrue: [| [[db cellFor: self attr: #closed] set: true]; self]
             ifFalse: [| [Twin operationError]]]]]]]] doc:
   "Delete exactly once. Repeated closes are harmless and answer the receiver."];
+
+// -- colors ------------------------------------------------------------------
+
+[Reflect defineMethod: #red:green:blue: on: TwinColor as: [:self :red :green :blue |
+  let valid := [[[[red >= 0] & [red <= 255]] & [[green >= 0] & [green <= 255]]] &
+    [[blue >= 0] & [blue <= 255]]];
+  [valid
+    ifTrue: [|
+      let color := [TwinColor clone];
+      [[db cellFor: color attr: #red] set: red];
+      [[db cellFor: color attr: #green] set: green];
+      [[db cellFor: color attr: #blue] set: blue];
+      color]
+    ifFalse: [| ["Twin colors require RGB components from 0 through 255" error: #twinColor]]]] doc:
+  "Construct a TwinColor or answer #twinColor Error for an invalid component."];
+
+[Reflect defineMethod: #red on: TwinColor as: [:self | [[db cellFor: self attr: #red] value]]];
+[Reflect defineMethod: #green on: TwinColor as: [:self | [[db cellFor: self attr: #green] value]]];
+[Reflect defineMethod: #blue on: TwinColor as: [:self | [[db cellFor: self attr: #blue] value]]];
+[Reflect defineMethod: #rgb24 on: TwinColor as: [:self |
+  [[[[self red] * 65536] + [[self green] * 256]] + [self blue]]] doc:
+  "The portable 0xRRGGBB value passed through the alien-twin ABI bridge."];
+
+[Reflect defineMethod: #black on: TwinColor as: [:self | [self red: 0 green: 0 blue: 0]]];
+[Reflect defineMethod: #blueColor on: TwinColor as: [:self | [self red: 0 green: 0 blue: 170]]];
+[Reflect defineMethod: #greenColor on: TwinColor as: [:self | [self red: 0 green: 170 blue: 0]]];
+[Reflect defineMethod: #cyan on: TwinColor as: [:self | [self red: 0 green: 170 blue: 170]]];
+[Reflect defineMethod: #redColor on: TwinColor as: [:self | [self red: 170 green: 0 blue: 0]]];
+[Reflect defineMethod: #magenta on: TwinColor as: [:self | [self red: 170 green: 0 blue: 170]]];
+[Reflect defineMethod: #yellow on: TwinColor as: [:self | [self red: 170 green: 170 blue: 0]]];
+[Reflect defineMethod: #white on: TwinColor as: [:self | [self red: 170 green: 170 blue: 170]]];
+[Reflect defineMethod: #brightBlack on: TwinColor as: [:self | [self red: 85 green: 85 blue: 85]]];
+[Reflect defineMethod: #brightBlue on: TwinColor as: [:self | [self red: 85 green: 85 blue: 255]]];
+[Reflect defineMethod: #brightGreen on: TwinColor as: [:self | [self red: 85 green: 255 blue: 85]]];
+[Reflect defineMethod: #brightCyan on: TwinColor as: [:self | [self red: 85 green: 255 blue: 255]]];
+[Reflect defineMethod: #brightRed on: TwinColor as: [:self | [self red: 255 green: 85 blue: 85]]];
+[Reflect defineMethod: #brightMagenta on: TwinColor as: [:self | [self red: 255 green: 85 blue: 255]]];
+[Reflect defineMethod: #brightYellow on: TwinColor as: [:self | [self red: 255 green: 255 blue: 85]]];
+[Reflect defineMethod: #brightWhite on: TwinColor as: [:self | [self red: 255 green: 255 blue: 255]]];
 
 // -- copied event value -------------------------------------------------------
 
@@ -288,11 +466,84 @@
   let k5 := [k4 at: [Twin eventMenuRow] put: #menuRow];
   let k6 := [k5 at: [Twin eventControl] put: #control];
   let k7 := [k6 at: [Twin eventDisplay] put: #display];
-  [k7 at: type ifAbsent: [| #unknown]]] doc:
+  let k8 := [k7 at: [Twin eventSelection] put: #selection];
+  let k9 := [k8 at: [Twin eventSelectionNotify] put: #selectionNotify];
+  let k10 := [k9 at: [Twin eventSelectionRequest] put: #selectionRequest];
+  let k11 := [k10 at: [Twin eventSelectionClear] put: #selectionClear];
+  let k12 := [k11 at: [Twin eventClientMessage] put: #clientMessage];
+  let k13 := [k12 at: [Twin eventControlReply] put: #controlReply];
+  [k13 at: type ifAbsent: [| #unknown]]] doc:
   "A symbolic classification of the raw Twin event type."];
 
 [Reflect defineMethod: #isFor: on: TwinEvent as: [:self :window |
   [[self widgetId] = [window id]]] doc:
   "Whether this event's widget id belongs to WINDOW."];
+
+[Reflect defineMethod: #isKey on: TwinEvent as: [:self | [[self type] = [Twin eventKey]]]];
+[Reflect defineMethod: #isMouse on: TwinEvent as: [:self | [[self type] = [Twin eventMouse]]]];
+[Reflect defineMethod: #isResize on: TwinEvent as: [:self |
+  [[[self type] = [Twin eventChange]] & [[self code] = [Twin changeResize]]]]];
+[Reflect defineMethod: #isExpose on: TwinEvent as: [:self |
+  [[[self type] = [Twin eventChange]] & [[self code] = [Twin changeExpose]]]]];
+[Reflect defineMethod: #isCloseRequest on: TwinEvent as: [:self |
+  [[[self type] = [Twin eventGadget]] & [[self code] = 0]]] doc:
+  "Whether this is Twin's standard window-close gadget event."];
+[Reflect defineMethod: #hasShiftBit: on: TwinEvent as: [:self :bit |
+  [[[[[self shiftFlags] / bit] floor] mod: 2] = 1]]];
+[Reflect defineMethod: #shiftDown on: TwinEvent as: [:self | [self hasShiftBit: 1]]];
+[Reflect defineMethod: #controlDown on: TwinEvent as: [:self | [self hasShiftBit: 2]]];
+[Reflect defineMethod: #altDown on: TwinEvent as: [:self | [self hasShiftBit: 4]]];
+
+// -- composable event source --------------------------------------------------
+
+[Reflect defineMethod: #on:do: on: TwinEventPump as: [:self :connection :handler |
+  let pump := [TwinEventPump clone];
+  [[db cellFor: pump attr: #connection] set: connection];
+  [[db cellFor: pump attr: #handler] set: handler];
+  pump] doc:
+  "Construct an event pump over CONNECTION. It does not own or close the connection."];
+
+[Reflect defineMethod: #connection on: TwinEventPump as: [:self |
+  [[db cellFor: self attr: #connection] value]]];
+[Reflect defineMethod: #handler on: TwinEventPump as: [:self |
+  [[db cellFor: self attr: #handler] value]]];
+
+[Reflect defineMethod: #dispatch: on: TwinEventPump as: [:self :event |
+  let handled := [[self handler] value: event];
+  [[handled isError] ifTrue: [| handled] ifFalse: [| event]]] doc:
+  "Dispatch EVENT and preserve it as the success result; handler Errors propagate."];
+
+[Reflect defineMethod: #stepWaiting: on: TwinEventPump as: [:self :wait |
+  let event := [[self connection] eventWaiting: wait];
+  [[event isError]
+    ifTrue: [| event]
+    ifFalse: [| [[event isNil] ifTrue: [| nil] ifFalse: [| [self dispatch: event]]]]]] doc:
+  "Read and dispatch one event, blocking only when WAIT is 1."];
+
+[Reflect defineMethod: #poll on: TwinEventPump as: [:self | [self stepWaiting: 0]] doc:
+  "Dispatch one queued event without blocking; answer nil when the queue is empty."];
+[Reflect defineMethod: #wait on: TwinEventPump as: [:self | [self stepWaiting: 1]] doc:
+  "Wait for and dispatch exactly one event."];
+
+[Reflect defineMethod: #drainAtMost: on: TwinEventPump as: [:self :limit |
+  let count := [0 asCell];
+  let result := [nil asCell];
+  let active := [[limit > 0] asCell];
+  [[| [[active value] & [[count value] < limit]]] whileTrue: [|
+    let event := [self poll];
+    [[event isError]
+      ifTrue: [| [result set: event]; [active set: false]]
+      ifFalse: [|
+        [[event isNil]
+          ifTrue: [| [result set: [count value]]; [active set: false]]
+          ifFalse: [| [count inc]]]]]]];
+  [[[result value] isNil]
+    ifTrue: [| [count value]]
+    ifFalse: [| [result value]]]] doc:
+  "Dispatch up to LIMIT queued events and answer their count, or the first Error."];
+
+[Reflect defineMethod: #drain on: TwinEventPump as: [:self |
+  [self drainAtMost: 256]] doc:
+  "Dispatch at most 256 queued events so a busy Twin source cannot starve other application inputs."];
 
 Twin

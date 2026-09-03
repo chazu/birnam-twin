@@ -1,5 +1,19 @@
 let suite := [TestSuite named: "Birnam Twin" module: #birnamTwin];
 
+[Globals at: #TwinTestEventSource put: [Object clone]];
+[Reflect defineMethod: #events: on: TwinTestEventSource as: [:self :events |
+  let source := [TwinTestEventSource clone];
+  [[db cellFor: source attr: #events] set: events];
+  [[db cellFor: source attr: #index] set: [0 asCell]];
+  source]];
+[Reflect defineMethod: #eventWaiting: on: TwinTestEventSource as: [:self :wait |
+  let events := [[db cellFor: self attr: #events] value];
+  let index := [[db cellFor: self attr: #index] value];
+  let current := [index value];
+  [[current < [events size]]
+    ifTrue: [| [index inc]; [events at: current]]
+    ifFalse: [| nil]]]];
+
 [suite test: "loads alien-twin through the Git dependency" do: [:t |
   [t expect: [Twin protocolVersionString] equals: "4.8.0" describes: "protocol version"]]];
 
@@ -34,5 +48,52 @@ let suite := [TestSuite named: "Birnam Twin" module: #birnamTwin];
   [t expect: [event kind] equals: #key describes: "key event classification"];
   [t expect: [event text] equals: "x" describes: "event text copied"];
   [t expect: [event isFor: window] equals: true describes: "widget matching"]]];
+
+[suite test: "represents portable RGB colors" do: [:t |
+  let color := [TwinColor red: 18 green: 52 blue: 86];
+  [t expect: [color rgb24] equals: 1193046 describes: "RGB packing"];
+  [t expect: [[TwinColor brightWhite] rgb24] equals: 16777215 describes: "bright palette"];
+  [t expect: [[TwinColor red: 256 green: 0 blue: 0] kind] equals: #twinColor describes: "component validation"]]];
+
+[suite test: "recognizes resize expose close and modifiers" do: [:t |
+  let resize := [TwinEvent type: [Twin eventChange] widget: 17 code: [Twin changeResize]
+    shifts: 0 x: 0 y: 0 width: 90 height: 30 text: nil];
+  let expose := [TwinEvent type: [Twin eventChange] widget: 17 code: [Twin changeExpose]
+    shifts: 0 x: 2 y: 3 width: 4 height: 5 text: nil];
+  let close := [TwinEvent type: [Twin eventGadget] widget: 17 code: 0
+    shifts: 0 x: 0 y: 0 width: 0 height: 0 text: nil];
+  let key := [TwinEvent type: [Twin eventKey] widget: 17 code: 0
+    shifts: 6 x: 0 y: 0 width: 0 height: 0 text: "x"];
+  [t expect: [resize isResize] equals: true describes: "resize predicate"];
+  [t expect: [expose isExpose] equals: true describes: "expose predicate"];
+  [t expect: [close isCloseRequest] equals: true describes: "close predicate"];
+  [t expect: [key controlDown] equals: true describes: "control modifier"];
+  [t expect: [key altDown] equals: true describes: "alt modifier"];
+  [t expect: [key shiftDown] equals: false describes: "shift modifier"]]];
+
+[suite test: "tracks window geometry from resize events" do: [:t |
+  let connection := [TwinConnection clone];
+  let window := [TwinWindow connection: connection id: 17 width: 80 height: 24];
+  let resize := [TwinEvent type: [Twin eventChange] widget: 17 code: [Twin changeResize]
+    shifts: 0 x: 0 y: 0 width: 100 height: 40 text: nil];
+  [window observeEvent: resize];
+  [t expect: [window width] equals: 100 describes: "observed width"];
+  [t expect: [window height] equals: 40 describes: "observed height"]]];
+
+[suite test: "event pump dispatches one event and drains the queue" do: [:t |
+  let event1 := [TwinEvent type: [Twin eventKey] widget: 1 code: 0
+    shifts: 0 x: 0 y: 0 width: 0 height: 0 text: "a"];
+  let event2 := [TwinEvent type: [Twin eventMouse] widget: 1 code: 0
+    shifts: 0 x: 2 y: 3 width: 0 height: 0 text: nil];
+  let event3 := [TwinEvent type: [Twin eventKey] widget: 1 code: 0
+    shifts: 0 x: 0 y: 0 width: 0 height: 0 text: "b"];
+  let seen := [0 asCell];
+  let source := [TwinTestEventSource events: #[event1 event2 event3]];
+  let pump := [TwinEventPump on: source do: [:event | [seen inc]]];
+  [t expect: [[pump poll] kind] equals: #key describes: "poll preserves event"];
+  [t expect: [pump drainAtMost: 1] equals: 1 describes: "bounded drain count"];
+  [t expect: [seen value] equals: 2 describes: "bounded handler calls"];
+  [t expect: [pump drain] equals: 1 describes: "remaining drain count"];
+  [t expect: [seen value] equals: 3 describes: "all handler calls"]]];
 
 suite

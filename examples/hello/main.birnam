@@ -1,0 +1,13 @@
+let display := [ProjectArgs at: 0 ifAbsent: [| ":0"]];
+
+let result := [Twin withConnectionTo: display do: [:connection |
+  [connection withWindow: "Hello from Birnam" width: 46 height: 8 do: [:window |
+    let painted := [window renderLines: #[
+      "birnam-twin is connected."
+      ""
+      "This window owns its Twin lifetime."
+      "Press any key to close it."
+    ]];
+    [painted ifNotError: [:ready | [connection waitForEvent]]]]]]];
+
+[result ifError: [:error | [System println: [error printString]]]]

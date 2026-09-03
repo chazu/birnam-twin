@@ -6,11 +6,19 @@ let display := [ProjectArgs at: 0 ifAbsent: [| nil]];
     [System println: "Pass a display for a managed-window smoke: birnam run -- :0"]]
   ifFalse: [|
     let result := [Twin withConnectionTo: display do: [:connection |
-      [connection withWindow: "birnam-twin" width: 48 height: 10 do: [:window |
-        [window write: "managed Twin window\n"];
-        [window write: "nonblocking event sample" atX: 2 y: 2];
-        [window sync];
-        [connection nextEvent]]]]];
+      [connection withWindow: "birnam-twin" width: 48 height: 10 cursor: [Twin cursorLine]
+        attributes: [Twin defaultWindowAttributes] flags: [Twin defaultWindowFlags] do: [:window |
+        let painted := [window
+          => foreground: [TwinColor brightWhite] background: [TwinColor blueColor]
+          => clear
+          => write: "managed Twin window" atX: 2 y: 1
+          => fillCodepoint: 32 fromX: 2 y: 3 width: 30 height: 2
+            foreground: [TwinColor black] background: [TwinColor brightCyan]
+          => foreground: [TwinColor black] background: [TwinColor brightCyan]
+          => write: "nonblocking event sample" atX: 4 y: 3
+          => focus
+          => sync];
+        [painted ifNotError: [:ready | [connection nextEvent]]]]]]];
     let message := [[result isError]
       ifTrue: [| [result printString]]
       ifFalse: [|

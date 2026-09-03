@@ -1,0 +1,8 @@
+name = "birnam-twin-example-hello"
+version = "0.1.0"
+main = "main.birnam"
+source_roots = ["."]
+load = ["birnamTwin"]
+
+[dependencies]
+birnamTwin = { path = "../.." }
