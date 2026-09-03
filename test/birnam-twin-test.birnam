@@ -1,0 +1,38 @@
+let suite := [TestSuite named: "Birnam Twin" module: #birnamTwin];
+
+[suite test: "loads alien-twin through the Git dependency" do: [:t |
+  [t expect: [Twin protocolVersionString] equals: "4.8.0" describes: "protocol version"]]];
+
+[suite test: "turns connection failure into a Birnam Error" do: [:t |
+  let connection := [Twin connect: ":65534"];
+  [t expect: [connection isError] equals: true describes: "connection failure is an Error"];
+  [t expect: [connection kind] equals: #twinConnection describes: "connection error kind"]]];
+
+[suite test: "guards window operations after the owning connection closes" do: [:t |
+  let connection := [TwinConnection clone];
+  [[db cellFor: connection attr: #handle] set: nil];
+  [[db cellFor: connection attr: #closed] set: true];
+  let window := [TwinWindow connection: connection id: 17];
+  let result := [window write: "ignored"];
+  [t expect: [window id] equals: 17 describes: "window retains its id"];
+  [t expect: [result isError] equals: true describes: "closed connection is guarded"];
+  [t expect: [result kind] equals: #twinConnectionClosed describes: "closed connection kind"]]];
+
+[suite test: "classifies copied event values without a native lifetime" do: [:t |
+  let event := [TwinEvent
+    type: [Twin eventKey]
+    widget: 17
+    code: 9
+    shifts: 2
+    x: 0
+    y: 0
+    width: 0
+    height: 0
+    text: "x"];
+  let connection := [TwinConnection clone];
+  let window := [TwinWindow connection: connection id: 17];
+  [t expect: [event kind] equals: #key describes: "key event classification"];
+  [t expect: [event text] equals: "x" describes: "event text copied"];
+  [t expect: [event isFor: window] equals: true describes: "widget matching"]]];
+
+suite

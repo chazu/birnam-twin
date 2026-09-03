@@ -1,0 +1,298 @@
+[Module named: #birnamTwin requires: #[#twin]];
+
+// birnam-twin is the ownership and value layer above alien-twin. The lower
+// module keeps Twin's ABI behind a C bridge; this module keeps raw addresses,
+// numeric success flags, and manual event frees out of application code.
+
+[Globals at: #TwinConnection put: [Object clone]];
+[Globals at: #TwinWindow put: [Object clone]];
+[Globals at: #TwinEvent put: [Object clone]];
+
+[Reflect docModule: #birnamTwin is:
+  "Managed Twin connections and windows plus copied event values, built on the alien-twin ABI module."];
+
+// -- Twin factories and scoped ownership -------------------------------------
+
+[Reflect defineMethod: #operationError on: Twin as: [:self |
+  [[self lastError] error: #twinOperation]] doc:
+  "A Birnam Error carrying alien-twin's latest operation failure."];
+
+[Reflect defineMethod: #connect on: Twin as: [:self |
+  let handle := [self open];
+  [[handle isNull]
+    ifTrue: [| [[self lastError] error: #twinConnection]]
+    ifFalse: [| [TwinConnection on: handle]]]] doc:
+  "Open the default Twin display and answer a managed TwinConnection or #twinConnection Error."];
+
+[Reflect defineMethod: #connect: on: Twin as: [:self :display |
+  let handle := [self open: display];
+  [[handle isNull]
+    ifTrue: [| [[self lastError] error: #twinConnection]]
+    ifFalse: [| [TwinConnection on: handle]]]] doc:
+  "Open DISPLAY and answer a managed TwinConnection or #twinConnection Error."];
+
+[Reflect defineMethod: #withConnectionDo: on: Twin as: [:self :body |
+  let connection := [self connect];
+  [connection ifNotError: [:live |
+    [[| [body value: live]] ensure: [| [live close]]]]]] doc:
+  "Open the default display for BODY and close it afterward; connection errors pass through."];
+
+[Reflect defineMethod: #withConnectionTo:do: on: Twin as: [:self :display :body |
+  let connection := [self connect: display];
+  [connection ifNotError: [:live |
+    [[| [body value: live]] ensure: [| [live close]]]]]] doc:
+  "Open DISPLAY for BODY and close it afterward; connection errors pass through."];
+
+// -- managed connection -------------------------------------------------------
+
+[Reflect defineMethod: #on: on: TwinConnection as: [:self :handle |
+  let connection := [TwinConnection clone];
+  [[db cellFor: connection attr: #handle] set: handle];
+  [[db cellFor: connection attr: #closed] set: false];
+  connection] doc:
+  "Internal constructor for one owned alien-twin connection handle."];
+
+[Reflect defineMethod: #rawHandle on: TwinConnection as: [:self |
+  [[db cellFor: self attr: #handle] value]] doc:
+  "The underlying alien-twin ForeignAddress. Prefer the managed protocol."];
+
+[Reflect defineMethod: #isClosed on: TwinConnection as: [:self |
+  [[db cellFor: self attr: #closed] value]] doc:
+  "Whether close has already released this connection."];
+
+[Reflect defineMethod: #openHandle on: TwinConnection as: [:self |
+  [[self isClosed]
+    ifTrue: [| ["Twin connection is closed" error: #twinConnectionClosed]]
+    ifFalse: [| [self rawHandle]]]] doc:
+  "The live raw handle, or #twinConnectionClosed Error."];
+
+[Reflect defineMethod: #withHandle: on: TwinConnection as: [:self :body |
+  let handle := [self openHandle];
+  [handle ifNotError: [:live | [body value: live]]]] doc:
+  "Run BODY with the live raw handle; a closed connection passes through as Error."];
+
+[Reflect defineMethod: #close on: TwinConnection as: [:self |
+  [[self isClosed]
+    ifTrue: [| self]
+    ifFalse: [|
+      let closed := [[self rawHandle] twinClose];
+      [[closed = 1]
+        ifTrue: [|
+          [[db cellFor: self attr: #closed] set: true];
+          [[db cellFor: self attr: #handle] set: nil];
+          self]
+        ifFalse: [| [Twin operationError]]]]]] doc:
+  "Close exactly once. Repeated closes are harmless and answer the receiver."];
+
+[Reflect defineMethod: #fileDescriptor on: TwinConnection as: [:self |
+  [self withHandle: [:handle | [handle twinConnectionFd]]]] doc:
+  "The Twin connection file descriptor, or a closed-connection Error."];
+
+[Reflect defineMethod: #libraryVersion on: TwinConnection as: [:self |
+  [self withHandle: [:handle | [handle twinLibraryVersion]]]] doc:
+  "The packed libtw version, or a closed-connection Error."];
+
+[Reflect defineMethod: #serverVersion on: TwinConnection as: [:self |
+  [self withHandle: [:handle | [handle twinServerVersion]]]] doc:
+  "The packed Twin server version, or a closed-connection Error."];
+
+[Reflect defineMethod: #displayWidth on: TwinConnection as: [:self |
+  [self withHandle: [:handle | [handle twinDisplayWidth]]]] doc:
+  "The current display width in cells, or a closed-connection Error."];
+
+[Reflect defineMethod: #displayHeight on: TwinConnection as: [:self |
+  [self withHandle: [:handle | [handle twinDisplayHeight]]]] doc:
+  "The current display height in cells, or a closed-connection Error."];
+
+[Reflect defineMethod: #inPanic on: TwinConnection as: [:self |
+  [self withHandle: [:handle | [[handle twinInPanic] = 1]]]] doc:
+  "Whether libtw considers the connection unusable, or a closed-connection Error."];
+
+[Reflect defineMethod: #flush on: TwinConnection as: [:self |
+  let result := [self withHandle: [:handle | [handle twinFlush]]];
+  [[result isError]
+    ifTrue: [| result]
+    ifFalse: [| [[result = 1] ifTrue: [| self] ifFalse: [| [Twin operationError]]]]]] doc:
+  "Flush pending Twin requests. Answers self or #twinOperation Error."];
+
+[Reflect defineMethod: #sync on: TwinConnection as: [:self |
+  let result := [self withHandle: [:handle | [handle twinSync]]];
+  [[result isError]
+    ifTrue: [| result]
+    ifFalse: [| [[result = 1] ifTrue: [| self] ifFalse: [| [Twin operationError]]]]]] doc:
+  "Synchronize with the Twin server. Answers self or #twinOperation Error."];
+
+[Reflect defineMethod: #newWindow:width:height: on: TwinConnection as: [:self :title :width :height |
+  let result := [self withHandle: [:handle |
+    [handle twinCreateWindow: title width: width height: height]]];
+  [[result isError]
+    ifTrue: [| result]
+    ifFalse: [|
+      [[result = 0]
+        ifTrue: [| [Twin operationError]]
+        ifFalse: [| [TwinWindow connection: self id: result]]]]]] doc:
+  "Create and map a managed window, or answer #twinOperation Error."];
+
+[Reflect defineMethod: #withWindow:width:height:do: on: TwinConnection as: [:self :title :width :height :body |
+  let window := [self newWindow: title width: width height: height];
+  [window ifNotError: [:live |
+    [[| [body value: live]] ensure: [| [live close]]]]]] doc:
+  "Create a window for BODY and delete it afterward; creation errors pass through."];
+
+[Reflect defineMethod: #eventWaiting: on: TwinConnection as: [:self :wait |
+  let raw := [self withHandle: [:handle | [handle twinNextEventWait: wait]]];
+  [[raw isError]
+    ifTrue: [| raw]
+    ifFalse: [|
+      [[raw isNull]
+        ifTrue: [|
+          let panic := [self inPanic];
+          [[panic isError]
+            ifTrue: [| panic]
+            ifFalse: [| [panic ifTrue: [| [Twin operationError]] ifFalse: [| nil]]]]]
+        ifFalse: [| [TwinEvent fromRaw: raw]]]]]] doc:
+  "Read one event, waiting when WAIT is 1. Answers a TwinEvent, nil, or Error."];
+
+[Reflect defineMethod: #nextEvent on: TwinConnection as: [:self |
+  [self eventWaiting: 0]] doc:
+  "Read one queued event without blocking; answers nil when none is available."];
+
+[Reflect defineMethod: #waitForEvent on: TwinConnection as: [:self |
+  [self eventWaiting: 1]] doc:
+  "Block for one event and answer a copied TwinEvent or Error."];
+
+// -- managed window -----------------------------------------------------------
+
+[Reflect defineMethod: #connection:id: on: TwinWindow as: [:self :connection :id |
+  let window := [TwinWindow clone];
+  [[db cellFor: window attr: #connection] set: connection];
+  [[db cellFor: window attr: #id] set: id];
+  [[db cellFor: window attr: #closed] set: false];
+  window] doc:
+  "Internal constructor for a window id owned by CONNECTION."];
+
+[Reflect defineMethod: #connection on: TwinWindow as: [:self |
+  [[db cellFor: self attr: #connection] value]] doc:
+  "The managed connection that owns this window."];
+
+[Reflect defineMethod: #id on: TwinWindow as: [:self |
+  [[db cellFor: self attr: #id] value]] doc:
+  "The underlying Twin window id, useful for matching event widget ids."];
+
+[Reflect defineMethod: #isClosed on: TwinWindow as: [:self |
+  [[db cellFor: self attr: #closed] value]] doc:
+  "Whether this window has already been deleted."];
+
+[Reflect defineMethod: #withWindowHandle: on: TwinWindow as: [:self :body |
+  [[self isClosed]
+    ifTrue: [| ["Twin window is closed" error: #twinWindowClosed]]
+    ifFalse: [| [[self connection] withHandle: [:handle |
+      [body value: handle value: [self id]]]]]]] doc:
+  "Run BODY with the live connection handle and window id, or pass through a lifecycle Error."];
+
+[Reflect defineMethod: #nativeOperation: on: TwinWindow as: [:self :body |
+  let result := [self withWindowHandle: body];
+  [[result isError]
+    ifTrue: [| result]
+    ifFalse: [| [[result = 1] ifTrue: [| self] ifFalse: [| [Twin operationError]]]]]] doc:
+  "Run a numeric alien-twin window operation and normalize success to self."];
+
+[Reflect defineMethod: #write: on: TwinWindow as: [:self :text |
+  [self nativeOperation: [:handle :id | [handle twinWriteUtf8: id text: text]]]] doc:
+  "Write UTF-8 text at the current cursor. Answers self or Error."];
+
+[Reflect defineMethod: #title: on: TwinWindow as: [:self :title |
+  [self nativeOperation: [:handle :id | [handle twinSetTitle: id title: title]]]] doc:
+  "Change the window title. Answers self or Error."];
+
+[Reflect defineMethod: #cursorX:y: on: TwinWindow as: [:self :x :y |
+  [self nativeOperation: [:handle :id | [handle twinGoto: id x: x y: y]]]] doc:
+  "Move the window cursor to X,Y. Answers self or Error."];
+
+[Reflect defineMethod: #resizeTo:by: on: TwinWindow as: [:self :width :height |
+  [self nativeOperation: [:handle :id | [handle twinResize: id width: width height: height]]]] doc:
+  "Resize the window to WIDTH by HEIGHT cells. Answers self or Error."];
+
+[Reflect defineMethod: #write:atX:y: on: TwinWindow as: [:self :text :x :y |
+  let moved := [self cursorX: x y: y];
+  [moved ifNotError: [:window | [window write: text]]]] doc:
+  "Move to X,Y and write TEXT, preserving the first Error."];
+
+[Reflect defineMethod: #sync on: TwinWindow as: [:self |
+  let result := [[self connection] sync];
+  [[result isError] ifTrue: [| result] ifFalse: [| self]]] doc:
+  "Synchronize the owning connection and answer this window or Error."];
+
+[Reflect defineMethod: #close on: TwinWindow as: [:self |
+  [[self isClosed]
+    ifTrue: [| self]
+    ifFalse: [|
+      let result := [self withWindowHandle: [:handle :id | [handle twinDeleteWindow: id]]];
+      [[result isError]
+        ifTrue: [| result]
+        ifFalse: [|
+          [[result = 1]
+            ifTrue: [| [[db cellFor: self attr: #closed] set: true]; self]
+            ifFalse: [| [Twin operationError]]]]]]]] doc:
+  "Delete exactly once. Repeated closes are harmless and answer the receiver."];
+
+// -- copied event value -------------------------------------------------------
+
+[Reflect defineMethod: #type:widget:code:shifts:x:y:width:height:text: on: TwinEvent
+  as: [:self :type :widget :code :shifts :x :y :width :height :text |
+    let event := [TwinEvent clone];
+    [[db cellFor: event attr: #type] set: type];
+    [[db cellFor: event attr: #widget] set: widget];
+    [[db cellFor: event attr: #code] set: code];
+    [[db cellFor: event attr: #shifts] set: shifts];
+    [[db cellFor: event attr: #x] set: x];
+    [[db cellFor: event attr: #y] set: y];
+    [[db cellFor: event attr: #width] set: width];
+    [[db cellFor: event attr: #height] set: height];
+    [[db cellFor: event attr: #text] set: text];
+    event] doc:
+  "Construct an immutable-by-convention TwinEvent value from copied fields."];
+
+[Reflect defineMethod: #fromRaw: on: TwinEvent as: [:self :raw |
+  let event := [self
+    type: [raw twinEventType]
+    widget: [raw twinEventWidget]
+    code: [raw twinEventCode]
+    shifts: [raw twinEventShiftFlags]
+    x: [raw twinEventX]
+    y: [raw twinEventY]
+    width: [raw twinEventWidth]
+    height: [raw twinEventHeight]
+    text: [raw twinEventText]];
+  [raw twinEventFree];
+  event] doc:
+  "Copy a native event into Birnam state and immediately release its native allocation."];
+
+[Reflect defineMethod: #type on: TwinEvent as: [:self | [[db cellFor: self attr: #type] value]]];
+[Reflect defineMethod: #widgetId on: TwinEvent as: [:self | [[db cellFor: self attr: #widget] value]]];
+[Reflect defineMethod: #code on: TwinEvent as: [:self | [[db cellFor: self attr: #code] value]]];
+[Reflect defineMethod: #shiftFlags on: TwinEvent as: [:self | [[db cellFor: self attr: #shifts] value]]];
+[Reflect defineMethod: #x on: TwinEvent as: [:self | [[db cellFor: self attr: #x] value]]];
+[Reflect defineMethod: #y on: TwinEvent as: [:self | [[db cellFor: self attr: #y] value]]];
+[Reflect defineMethod: #width on: TwinEvent as: [:self | [[db cellFor: self attr: #width] value]]];
+[Reflect defineMethod: #height on: TwinEvent as: [:self | [[db cellFor: self attr: #height] value]]];
+[Reflect defineMethod: #text on: TwinEvent as: [:self | [[db cellFor: self attr: #text] value]]];
+
+[Reflect defineMethod: #kind on: TwinEvent as: [:self |
+  let type := [self type];
+  let k0 := [Map new];
+  let k1 := [k0 at: [Twin eventKey] put: #key];
+  let k2 := [k1 at: [Twin eventMouse] put: #mouse];
+  let k3 := [k2 at: [Twin eventChange] put: #change];
+  let k4 := [k3 at: [Twin eventGadget] put: #gadget];
+  let k5 := [k4 at: [Twin eventMenuRow] put: #menuRow];
+  let k6 := [k5 at: [Twin eventControl] put: #control];
+  let k7 := [k6 at: [Twin eventDisplay] put: #display];
+  [k7 at: type ifAbsent: [| #unknown]]] doc:
+  "A symbolic classification of the raw Twin event type."];
+
+[Reflect defineMethod: #isFor: on: TwinEvent as: [:self :window |
+  [[self widgetId] = [window id]]] doc:
+  "Whether this event's widget id belongs to WINDOW."];
+
+Twin

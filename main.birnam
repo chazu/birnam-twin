@@ -1,0 +1,20 @@
+let display := [ProjectArgs at: 0 ifAbsent: [| nil]];
+
+[[display isNil]
+  ifTrue: [|
+    [System println: ["birnam-twin over Twin protocol " , [Twin protocolVersionString]]];
+    [System println: "Pass a display for a managed-window smoke: birnam run -- :0"]]
+  ifFalse: [|
+    let result := [Twin withConnectionTo: display do: [:connection |
+      [connection withWindow: "birnam-twin" width: 48 height: 10 do: [:window |
+        [window write: "managed Twin window\n"];
+        [window write: "nonblocking event sample" atX: 2 y: 2];
+        [window sync];
+        [connection nextEvent]]]]];
+    let message := [[result isError]
+      ifTrue: [| [result printString]]
+      ifFalse: [|
+        [[result isNil]
+          ifTrue: [| "no event queued (window closed)"]
+          ifFalse: [| [["event: " , [[result kind] printString]] , " (window closed)"]]]]];
+    [System println: message]]]

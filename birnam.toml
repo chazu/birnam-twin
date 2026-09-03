@@ -1,0 +1,11 @@
+name = "birnam-twin"
+version = "0.1.0"
+main = "main.birnam"
+source_roots = ["src"]
+load = ["birnamTwin"]
+
+[dependencies]
+twin = { git = "https://github.com/chazu/birnam-alien-twin.git", rev = "b138078cdf0d9dead185310557a214156502a438" }
+
+[test]
+sources = ["test/birnam-twin-test.birnam"]
